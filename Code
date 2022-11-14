@@ -1,0 +1,198 @@
+int range = 5; //number of candles to analyze
+double TP = 0.75;       
+double SLK = 0.50;   
+double FirstStep = 200.00; // First entry
+double LastStep = 450.00;  // last entry
+int Slip = 5; // slippage
+int StopLossLeap = 0;
+double oldStopLoss;
+bool MM = True;
+bool Euforia = False; 
+bool Panic = False;
+bool Agree = True;
+int a = 0; 
+double OpenPrice[];
+double highest;
+double lowest;
+datetime LastTradeCloseTime;
+bool Agree3 = True;
+
+
+void SetStopLoss(double price)
+   {
+   for(int k=1; k<=OrdersTotal(); k++) //StopLoss modification for each order
+      {
+      if (OrderSelect(k-1,SELECT_BY_POS)== True) bool ModifyError = OrderModify(OrderTicket(),OrderOpenPrice(),price,0,0,clrNONE);
+      if (ModifyError == True) Print("Order modified successfully."); 
+      }
+   }
+   
+void OnTick()
+   {  
+      
+      
+      
+      double high = High[ArrayMaximum(High,range,0)]; 
+      double low = Low[ArrayMinimum(Low,range,0)];
+      ArrayResize(OpenPrice, a + 1);
+        
+            
+      if (MM)  // position size management
+         {
+            static int OrdersNumber = 10;     
+            double a1 = (LastStep-FirstStep);
+            double a2 = (LastStep-FirstStep)*0.05;
+            static double IntervalsSum;
+            for (static double r = 1.00; IntervalsSum<=a1; r += 0.05){//
+               IntervalsSum = 0;
+               for(int c=0; c<=OrdersNumber-1; c++){
+               IntervalsSum += a2 + r*c;
+               }
+            }
+            static double intervals[];
+            ArrayResize(intervals, OrdersNumber);
+            intervals[0] = a2 + r*(OrdersNumber-1);
+            int i = 1;
+            while (i < OrdersNumber){ 
+               intervals[i] = intervals[i-1] - r;
+               i = i+1;
+               } 
+            double Loss;
+            static double lot = 0.01;
+            while (Loss < AccountBalance()*SLK){
+               Loss = 0;
+               double ProfitOnPoint = 1;
+               for (int b=0; b<=OrdersNumber-1;b++){
+                  Loss += intervals[b]*(b+1)*lot*ProfitOnPoint;
+                  }
+               lot += 0.01;
+               } 
+            lot = NormalizeDouble(lot,2);
+            MM = False;          
+         }
+    
+           
+      if (Bid - low >= FirstStep && Agree == True && TimeLocal() - LastTradeCloseTime > range*3600 )
+         {  
+            int ticket = OrderSend(Symbol(), OP_SELL, 2, Bid, Slip, 0,0,NULL,123,0,clrNONE);           
+            if (ticket <0) Print("OrderSend failed with error #",GetLastError());
+            if (OrderSelect(a, SELECT_BY_POS) == True) OpenPrice[a] = OrderOpenPrice();  
+            a = a + 1;
+            Euforia = True;
+            Agree = False;
+            MM = False;
+            lowest = low;    
+         }
+        
+      if (high - Ask >= FirstStep && Zgoda == True && TimeLocal() - LastTradeCloseTime > range*3600)
+         {
+            int ticket = OrderSend(Symbol(), OP_BUY, lot, Ask, Slip, 0,0,NULL,123,0,clrNONE);           
+            if (ticket <0) Print("OrderSend failed with error #",GetLastError());
+            if (OrderSelect(a, SELECT_BY_POS) == True) OpenPrice[a] = OrderOpenPrice();
+            a = a + 1;           
+            Panic = True;
+            Agree = False;
+            MM = False;
+            highest = high;
+            lowest = Ask;
+            
+         }
+
+      
+      if (Euforia && a < OrdersNumber)
+         {
+            if (Bid - OpenPrice[a-1] > intervals[a-1] )
+               {
+                  ticket = OrderSend(Symbol(), OP_SELL, lot, Bid, Slip, 0,0,NULL,0,0,clrNONE); 
+                  if (ticket <0) Print("OrderSend failed with error #",GetLastError());
+                  if (OrderSelect(a, SELECT_BY_POS) == True) OpenPrice[a] = OrderOpenPrice();
+                  a = a+1;
+               } 
+            if (Bid > highest) highest = Bid;
+         }
+      
+      if (Panic && a < OrdersNumber)
+         {
+            if (OpenPrice[a-1] - Ask > intervals[a-1])
+               {
+                  ticket = OrderSend(Symbol(), OP_BUY, lot, Ask, Slip, 0,0,NULL,0,0,clrNONE);
+                  if (ticket <0) Print("OrderSend failed with error #",GetLastError());
+                  if (OrderSelect(a, SELECT_BY_POS) == True) OpenPrice[a] = OrderOpenPrice();
+                  a = a+1;
+               } 
+            if (Ask < lowest) lowest = Ask; 
+         }
+   
+      double dif = highest - lowest;//dynamic TakeProfit
+      
+      if (Euforia)
+         {
+         double BE = highest - TP*dif -10*StopLossLeap;
+         if (Bid<BE)
+            {
+            SetStopLoss(Bid+40);
+            StopLossLeap +=1;
+            }
+         }
+         
+      if (Panic)
+         {
+         BE = lowest + TP*dif +20*StopLossLeap;
+         if (Ask>BE)
+            {
+            SetStopLoss(Ask-50);
+            StopLossLeap +=1;
+            }
+         }
+
+      if (NormalizeDouble(AccountEquity(),2) < AccountBalance()*SLK)
+         { 
+            for(int k = OrdersTotal()-1;k>=0; k--)
+               {   
+                     bool SelectError1 = OrderSelect(k,SELECT_BY_POS);
+                     if (OrderType() == OP_SELL)bool CloseError = OrderClose(OrderTicket(),OrderLots(),Ask,Slip,clrNONE);
+                     if (OrderType() == OP_BUY) CloseError = OrderClose(OrderTicket(),OrderLots(),Bid,Slip,clrNONE);  
+               }      
+
+            ArrayFree(OpenPrice);
+            ArrayFree(intervals);
+            MM = True;
+            Euforia = False; 
+            Panic = False;
+            Agree = True;
+            a = 0;
+            StopLossLeap = 0;
+            LastTradeCloseTime = TimeLocal();
+            lot = 0;
+            
+            //TakeProfit = 0;
+         }
+    if (Panic && OrdersTotal() == 0)
+      {
+      ArrayFree(OpenPrice);
+      ArrayFree(intervals);
+      MM = True;
+      Euforia = False; 
+      Panic = False;
+      Agree = True;
+      a = 0;
+      StopLossLeap = 0;
+      LastTradeCloseTime = TimeLocal();
+      lot = 0;
+      }
+      
+    if (Euforia && OrdersTotal() == 0)
+      {
+      ArrayFree(OpenPrice);
+      ArrayFree(intervals);
+      MM = True;
+      Euforia = False; 
+      Panic = False;
+      Agree = True;
+      a = 0;
+      StopLossLeap = 0;
+      LastTradeCloseTime = TimeLocal();
+      lot = 0;
+      }  
+
+}
